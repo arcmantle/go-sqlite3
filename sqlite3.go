@@ -16,6 +16,7 @@ package sqlite3
 #cgo CFLAGS: -DHAVE_USLEEP=1
 #cgo CFLAGS: -DSQLITE_ENABLE_FTS3
 #cgo CFLAGS: -DSQLITE_ENABLE_FTS3_PARENTHESIS
+#cgo CFLAGS: -DSQLITE_ENABLE_FTS5
 #cgo CFLAGS: -DSQLITE_TRACE_SIZE_LIMIT=15
 #cgo CFLAGS: -DSQLITE_OMIT_DEPRECATED
 #cgo CFLAGS: -DSQLITE_DEFAULT_WAL_SYNCHRONOUS=1
@@ -30,6 +31,13 @@ package sqlite3
 #endif
 #include <stdlib.h>
 #include <string.h>
+#define SQLITE_CORE 1
+#include "sqlite-vec.h"
+
+static int
+_sqlite3_vec_init(sqlite3 *db) {
+	return sqlite3_vec_init(db, 0, 0);
+}
 
 #ifdef __CYGWIN__
 # include <errno.h>
@@ -1474,6 +1482,11 @@ func (d *SQLiteDriver) Open(dsn string) (driver.Conn, error) {
 	}
 	if db == nil {
 		return nil, errors.New("sqlite succeeded without returning a database")
+	}
+	if rv := C._sqlite3_vec_init(db); rv != C.SQLITE_OK {
+		err := lastError(db)
+		C.sqlite3_close_v2(db)
+		return nil, err
 	}
 
 	exec := func(s string) error {
