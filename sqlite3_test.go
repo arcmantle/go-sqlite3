@@ -10,6 +10,7 @@ package sqlite3
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"database/sql/driver"
 	"errors"
@@ -1998,6 +1999,77 @@ func TestNamedParam(t *testing.T) {
 }
 
 var customFunctionOnce sync.Once
+
+func TestPositionalBindingTypesAndMixedArgs(t *testing.T) {
+	database, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	instant := time.Date(2026, 10, 5, 12, 34, 56, 0, time.UTC)
+	var nullKind, emptyBlobKind, blobHex, nilBlobKind, text, timestamp string
+	var emptyLength, trueValue, falseValue int
+	var integer int64
+	var fraction float64
+	err = database.QueryRow("SELECT typeof(?), typeof(?), hex(?), typeof(?), length(?), ?, ?, ?, ?, ?, ?",
+		nil, []byte{}, []byte{0, 255}, []byte(nil), "", true, false, int64(-42), 1.5, "text", instant).
+		Scan(&nullKind, &emptyBlobKind, &blobHex, &nilBlobKind, &emptyLength, &trueValue, &falseValue, &integer, &fraction, &text, &timestamp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if nullKind != "null" || emptyBlobKind != "blob" || blobHex != "00FF" || nilBlobKind != "null" || emptyLength != 0 || trueValue != 1 || falseValue != 0 || integer != -42 || fraction != 1.5 || text != "text" || timestamp != instant.Format(SQLiteTimestampFormats[0]) {
+		t.Fatalf("invalid positional values: %q %q %q %q %d %d %d %d %g %q %q", nullKind, emptyBlobKind, blobHex, nilBlobKind, emptyLength, trueValue, falseValue, integer, fraction, text, timestamp)
+	}
+	var positional, named string
+	var first, repeated int
+	err = database.QueryRow("SELECT ?, :value, @other, $third, :value", "positional", sql.Named("value", 7), sql.Named("other", "named"), sql.Named("third", 2.5)).
+		Scan(&positional, &first, &named, &fraction, &repeated)
+	if err != nil || positional != "positional" || first != 7 || named != "named" || fraction != 2.5 || repeated != 7 {
+		t.Fatalf("invalid mixed arguments: %v %q %d %q %g %d", err, positional, first, named, fraction, repeated)
+	}
+	if err := database.QueryRow("SELECT ?2, ?1", 11, 22).Scan(&first, &repeated); err != nil || first != 22 || repeated != 11 {
+		t.Fatalf("invalid numbered arguments: %v %d %d", err, first, repeated)
+	}
+	if _, err := database.Exec("SELECT ?, ?", 1); err == nil {
+		t.Fatal("missing positional argument did not fail")
+	}
+	if _, err := database.Exec("SELECT ?", struct{}{}); err == nil {
+		t.Fatal("unsupported positional argument did not fail")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := database.ExecContext(ctx, "SELECT ?", 1); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled positional query: %v", err)
+	}
+}
+
+func BenchmarkPositionalBinding(b *testing.B) {
+	connection, err := (&SQLiteDriver{}).Open(":memory:")
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer connection.Close()
+	const argumentCount = 512
+	prepared, err := connection.(*SQLiteConn).prepare(context.Background(), "SELECT "+strings.TrimSuffix(strings.Repeat("?,", argumentCount), ","))
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer prepared.Close()
+	arguments := make([]driver.NamedValue, argumentCount)
+	values := []any{nil, int64(42), "payload", []byte{0, 255}, true, 1.5}
+	for index := range arguments {
+		arguments[index] = driver.NamedValue{Ordinal: index + 1, Value: values[index%len(values)]}
+	}
+	statement := prepared.(*SQLiteStmt)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for iteration := 0; iteration < b.N; iteration++ {
+		if err := statement.bind(arguments); err != nil {
+			b.Fatal(err)
+		}
+	}
+	b.StopTimer()
+}
 
 func BenchmarkCustomFunctions(b *testing.B) {
 	customFunctionOnce.Do(func() {

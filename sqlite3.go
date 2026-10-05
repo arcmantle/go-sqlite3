@@ -1939,26 +1939,42 @@ func (s *SQLiteStmt) bind(args []driver.NamedValue) error {
 		return s.c.lastError()
 	}
 
-	bindIndices := make([][3]int, len(args))
-	prefixes := []string{":", "@", "$"}
-	for i, v := range args {
-		bindIndices[i][0] = args[i].Ordinal
-		if v.Name != "" {
-			for j := range prefixes {
-				cname := C.CString(prefixes[j] + v.Name)
-				bindIndices[i][j] = int(C.sqlite3_bind_parameter_index(s.s, cname))
-				C.free(unsafe.Pointer(cname))
+	positional := true
+	for _, argument := range args {
+		if argument.Name != "" {
+			positional = false
+			break
+		}
+	}
+	var bindIndices [][3]int
+	if !positional {
+		bindIndices = make([][3]int, len(args))
+		prefixes := []string{":", "@", "$"}
+		for index, argument := range args {
+			bindIndices[index][0] = argument.Ordinal
+			if argument.Name != "" {
+				for prefixIndex, prefix := range prefixes {
+					cname := C.CString(prefix + argument.Name)
+					bindIndices[index][prefixIndex] = int(C.sqlite3_bind_parameter_index(s.s, cname))
+					C.free(unsafe.Pointer(cname))
+				}
+				args[index].Ordinal = bindIndices[index][0]
 			}
-			args[i].Ordinal = bindIndices[i][0]
 		}
 	}
 
-	for i, arg := range args {
-		for j := range bindIndices[i] {
-			if bindIndices[i][j] == 0 {
+	for index, arg := range args {
+		indices := [3]int{arg.Ordinal}
+		indexCount := 1
+		if !positional {
+			indices = bindIndices[index]
+			indexCount = len(indices)
+		}
+		for offset := 0; offset < indexCount; offset++ {
+			if indices[offset] == 0 {
 				continue
 			}
-			n := C.int(bindIndices[i][j])
+			n := C.int(indices[offset])
 			switch v := arg.Value.(type) {
 			case nil:
 				rv = C.sqlite3_bind_null(s.s, n)

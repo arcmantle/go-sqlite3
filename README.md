@@ -19,11 +19,45 @@ Supported Golang version: See [.github/workflows/go.yaml](./.github/workflows/go
 
 This package follows the official [Golang Release Policy](https://golang.org/doc/devel/release.html#policy).
 
+# Fork Changes
+
+This checkout uses the module path `github.com/arcmantle/go-sqlite3`.
+The following change is specific to this fork.
+
+## Positional Argument Binding
+
+When every argument has an empty `driver.NamedValue.Name`, the driver binds each
+value by its `Ordinal`. It does not allocate the three-index array used for named
+parameter lookup. If any argument is named, the complete argument list uses the
+existing lookup path for `:`, `@`, and `$` parameter names.
+
+Value conversion, null and empty-value handling, SQL errors, and cancellation
+are unchanged. This change does not add statement caching or change the SQLite
+engine, connection settings, public APIs, or dependencies. It needs no option or
+environment variable. Named calls have an additional argument-name check.
+
+## Performance Evidence
+
+A private matched control on 2026-10-05 used Linux ARM64, Go 1.27.1, two CPUs,
+a 1 GiB memory limit, and no swap. For one prepared statement with 512 mixed-type
+positional values, median binding time was 27.55 versus 25.35 microseconds, about
+8% less time. Go allocation was 12,968 versus 680 bytes per call: one allocation
+and 12,288 bytes were removed. This benchmark excludes SQL preparation and row
+execution; it does not measure C allocations or resident memory.
+
+Three matched 1,000-source indexing pairs had median times of 11.78 versus 10.99
+seconds, with complete graph checksums unchanged. The paired time reductions
+varied from 2.8% to 10.9%. These results do not promise a fixed overall gain or
+linear scaling. No 10,000-source gain is established.
+
 ### Overview
 
 - [go-sqlite3](#go-sqlite3)
 - [Description](#description)
     - [Overview](#overview)
+- [Fork Changes](#fork-changes)
+  - [Positional Argument Binding](#positional-argument-binding)
+  - [Performance Evidence](#performance-evidence)
 - [Installation](#installation)
 - [API Reference](#api-reference)
 - [Connection String](#connection-string)
